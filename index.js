@@ -48,7 +48,6 @@ const prismaSchema = fs.readFileSync("./schema.prisma", "utf-8");
     delete: "generate a DELETE.",
   };
 
-  /** Generate SQL via Groq & execute with Prisma */
   const runOp = async (op, nlPrompt) => {
     const resp = await groqModel.invoke([
       {
@@ -68,8 +67,6 @@ const prismaSchema = fs.readFileSync("./schema.prisma", "utf-8");
     const count = await prisma.$executeRawUnsafe(sql);
     return { sql, count };
   };
-
-  /* ───────────────────────────── Tools ───────────────────────────── */
 
   const makeTool = (name) =>
     tool(
@@ -94,8 +91,6 @@ const prismaSchema = fs.readFileSync("./schema.prisma", "utf-8");
     groqModel,
     { agentType: "chat-zero-shot-react-description", verbose: false },
   );
-
-  /* ─────────────────────────── HTTP API ──────────────────────────── */
 
   const server = http.createServer((req, res) => {
     if (req.method !== "POST" || req.url !== "/query") {
