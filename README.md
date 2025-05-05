@@ -1,1 +1,1 @@
-just use the index.js
+just do npm start
