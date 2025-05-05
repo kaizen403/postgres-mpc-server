@@ -8,7 +8,6 @@ const { tool } = require("@langchain/core/tools");
 const { z } = require("zod");
 
 /* ───────────────────────────── Helpers ───────────────────────────── */
-
 const log = (...args) => console.log(new Date().toISOString(), "-", ...args);
 
 const cleanSQL = (raw) => {
@@ -17,10 +16,10 @@ const cleanSQL = (raw) => {
   return sql.endsWith(";") ? sql.slice(0, -1) : sql;
 };
 
-const prismaSchema = fs.readFileSync("./schema.prisma", "utf-8");
+// read Prisma schema as UTF-8
+const prismaSchema = fs.readFileSync("prisma/schema.prisma", "utf8");
 
 /* ──────────────────────────── Bootstrap ──────────────────────────── */
-
 (async function main() {
   const dbUrl = process.env.DATABASE_URL;
   const groqKey = process.env.GROQ_API_KEY;
@@ -39,8 +38,8 @@ const prismaSchema = fs.readFileSync("./schema.prisma", "utf-8");
   const schemaPrompt =
     `You have this Prisma schema:\n\n${prismaSchema}\n\n` +
     "Translate the user’s request into a valid PostgreSQL query " +
-    "using ONLY those tables/columns. Return only the raw SQL.";
-
+    "using ONLY those tables/columns. **Wrap every table and column name in double quotes** to preserve case. " +
+    "Return only the raw SQL.";
   const opInstructions = {
     select: "generate a SELECT.",
     create: "generate an INSERT.",
@@ -56,10 +55,8 @@ const prismaSchema = fs.readFileSync("./schema.prisma", "utf-8");
       },
       { role: "user", content: nlPrompt },
     ]);
-
     const sql = cleanSQL(resp.content);
     log(`${op.toUpperCase()} SQL:`, sql);
-
     if (op === "select") {
       const rows = await prisma.$queryRawUnsafe(sql);
       return { sql, rows };
@@ -68,26 +65,54 @@ const prismaSchema = fs.readFileSync("./schema.prisma", "utf-8");
     return { sql, count };
   };
 
-  const makeTool = (name) =>
+  const runRaw = async (rawInput) => {
+    const sql = cleanSQL(rawInput);
+    log("RAW SQL:", sql);
+    if (/^\s*select/i.test(sql)) {
+      const rows = await prisma.$queryRawUnsafe(sql);
+      return { sql, rows };
+    }
+    const count = await prisma.$executeRawUnsafe(sql);
+    return { sql, count };
+  };
+
+  const makeTool = (name, handler, description) =>
     tool(
       async (input) => {
-        const out = await runOp(name, input);
+        const out = await handler(input);
         return JSON.stringify(out);
       },
-      {
-        name,
-        description: `${name.toUpperCase()} rows based on a natural‑language prompt`,
-        schema: z.string(),
-      },
+      { name, description, schema: z.string() },
     );
 
-  const selectTool = makeTool("select");
-  const createTool = makeTool("create");
-  const updateTool = makeTool("update");
-  const deleteTool = makeTool("delete");
+  const selectTool = makeTool(
+    "select",
+    (i) => runOp("select", i),
+    "SELECT via natural-language prompt",
+  );
+  const createTool = makeTool(
+    "create",
+    (i) => runOp("create", i),
+    "INSERT via natural-language prompt",
+  );
+  const updateTool = makeTool(
+    "update",
+    (i) => runOp("update", i),
+    "UPDATE via natural-language prompt",
+  );
+  const deleteTool = makeTool(
+    "delete",
+    (i) => runOp("delete", i),
+    "DELETE via natural-language prompt",
+  );
+  const rawSqlTool = makeTool(
+    "rawSql",
+    runRaw,
+    "Execute a raw SQL query provided by the user",
+  );
 
   const executor = await initializeAgentExecutorWithOptions(
-    [selectTool, createTool, updateTool, deleteTool],
+    [selectTool, createTool, updateTool, deleteTool, rawSqlTool],
     groqModel,
     { agentType: "chat-zero-shot-react-description", verbose: false },
   );
@@ -107,21 +132,29 @@ const prismaSchema = fs.readFileSync("./schema.prisma", "utf-8");
         if (!prompt) throw new Error("`prompt` field required");
         log("PROMPT:", prompt);
 
-        const result = await executor.invoke({ input: prompt });
-
-        let data = result.output;
-        if (
-          Array.isArray(result.intermediateSteps) &&
-          result.intermediateSteps.length
-        ) {
-          data = result.intermediateSteps[0][1];
+        // If the prompt looks like raw SQL, bypass agent
+        let responseData;
+        if (/^\s*(SELECT|INSERT|UPDATE|DELETE)\b/i.test(prompt.trim())) {
+          responseData = await runRaw(prompt);
+        } else {
+          const result = await executor.invoke({ input: prompt });
+          // extract tool output
+          let out = result.output;
+          if (
+            Array.isArray(result.intermediateSteps) &&
+            result.intermediateSteps.length
+          ) {
+            out = result.intermediateSteps[0][1];
+          }
           try {
-            data = JSON.parse(data);
-          } catch {}
+            responseData = JSON.parse(out);
+          } catch {
+            responseData = out;
+          }
         }
 
         res.writeHead(200);
-        res.end(JSON.stringify({ status: "ok", data }, null, 2));
+        res.end(JSON.stringify({ status: "ok", data: responseData }, null, 2));
       } catch (err) {
         log("ERROR:", err.message);
         res.writeHead(400);
@@ -137,5 +170,5 @@ const prismaSchema = fs.readFileSync("./schema.prisma", "utf-8");
   });
 
   process.on("unhandledRejection", (err) => log("UNHANDLED:", err));
-  server.listen(9000, () => log("Server listening on :9000"));
+  server.listen(9001, () => log("Server listening on http://localhost:9001"));
 })();
