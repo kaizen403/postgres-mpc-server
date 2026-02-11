@@ -15,6 +15,11 @@ const log = (...args) => console.log(new Date().toISOString(), "-", ...args);
   const executor = await createExecutor();
 
   const server = http.createServer((req, res) => {
+    if (req.method === "GET" && req.url === "/health") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      return res.end(JSON.stringify({ status: "ok" }));
+    }
+
     if (req.method !== "POST" || req.url !== "/query") {
       res.writeHead(404, { "Content-Type": "application/json" });
       return res.end(JSON.stringify({ status: "error", error: "Not found" }));
