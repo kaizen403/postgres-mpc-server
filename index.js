@@ -117,9 +117,20 @@ const prismaSchema = fs.readFileSync("prisma/schema.prisma", "utf8");
     { agentType: "chat-zero-shot-react-description", verbose: false },
   );
 
+  const corsHeaders = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization",
+  };
+
   const server = http.createServer((req, res) => {
+    if (req.method === "OPTIONS") {
+      res.writeHead(204, corsHeaders);
+      return res.end();
+    }
+
     if (req.method !== "POST" || req.url !== "/query") {
-      res.writeHead(404, { "Content-Type": "application/json" });
+      res.writeHead(404, { ...corsHeaders, "Content-Type": "application/json" });
       return res.end(JSON.stringify({ status: "error", error: "Not found" }));
     }
 
@@ -127,6 +138,7 @@ const prismaSchema = fs.readFileSync("prisma/schema.prisma", "utf8");
     req.on("data", (chunk) => (body += chunk));
     req.on("end", async () => {
       res.setHeader("Content-Type", "application/json");
+      Object.entries(corsHeaders).forEach(([k, v]) => res.setHeader(k, v));
       try {
         const { prompt } = JSON.parse(body);
         if (!prompt) throw new Error("`prompt` field required");
@@ -164,7 +176,7 @@ const prismaSchema = fs.readFileSync("prisma/schema.prisma", "utf8");
 
     req.on("error", (err) => {
       log("REQUEST ERROR:", err);
-      res.writeHead(500, { "Content-Type": "application/json" });
+      res.writeHead(500, { ...corsHeaders, "Content-Type": "application/json" });
       res.end(JSON.stringify({ status: "error", error: "Request error" }));
     });
   });
